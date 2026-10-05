@@ -23,6 +23,57 @@ export type ChangeRequest = {
   diff: { token: string; before: string; after: string };
 };
 
+export type Role = 'maintainer' | 'editor';
+
+export type Product = {
+  id: string;
+  name: string;
+  pulledReleaseId: string | null;
+  frozen: boolean;
+};
+
+export type ProductReceipt = {
+  id: string;
+  productId: string;
+  releaseId: string;
+  pulledAt: string;
+  items: number;
+};
+
+export type DependencyEntry = { tokenId: string; ref: string | null };
+
+export type ReleaseSnapshot = {
+  id: string;
+  version: string;
+  publishedAt: string;
+  publisher: string;
+  dependencyList: DependencyEntry[] | null;
+  tokenCount: number;
+};
+
+export type DeactivationStatus = 'pending' | 'confirmed' | 'failed' | 'reenabled';
+
+export type DeactivationRecord = {
+  id: string;
+  tokenId: string;
+  tokenName: string;
+  reason: string;
+  fixValue: string;
+  status: DeactivationStatus;
+  createdAt: string;
+  createdBy: string;
+  confirmedAt?: string;
+  confirmedBy?: string;
+  failureReason?: string;
+  affectedProductIds: string[];
+  recalculatedAliasIds: string[];
+  originalBaseValue: string;
+  originalAliasValues: Record<string, string>;
+  version: number;
+  restoredAt?: string;
+  reenabledAt?: string;
+};
+
 const initialTokens: Token[] = [
   { id: 'color.base.blue.600', name: '品牌主色 600', category: 'color', value: '#2864dc', themes: { light: '#2864dc', dark: '#6f96ff', ops: '#24786a', contrast: '#0b4dba' }, usage: 184, status: 'stable', description: '主操作、链接和重点状态' },
   { id: 'color.semantic.primary', name: '语义主色', category: 'color', value: '{color.base.blue.600}', ref: 'color.base.blue.600', themes: { light: '{color.base.blue.600}', dark: '{color.base.blue.400}', ops: '{color.base.green.600}', contrast: '{color.base.blue.800}' }, usage: 126, status: 'stable', description: '组件库统一主色别名' },
@@ -47,9 +98,33 @@ const changes: ChangeRequest[] = [
   { id: 'CR-423', title: '统一浮层圆角', requester: '组件维护组', scope: '12 个组件 · 36 处引用', impact: 28, status: '待评审', diff: { token: 'radius.control', before: '8px', after: '6px' } }
 ];
 
+const initialProducts: Product[] = [
+  { id: 'prod-component', name: '组件库', pulledReleaseId: 'DS 4.6.0-rc.2', frozen: false },
+  { id: 'prod-ops', name: '运营后台', pulledReleaseId: 'DS 4.5.2', frozen: false },
+  { id: 'prod-mobile', name: '移动端组件', pulledReleaseId: 'DS 4.5.1', frozen: false },
+  { id: 'prod-data', name: '数据平台', pulledReleaseId: null, frozen: false }
+];
+
+const initialReceipts: ProductReceipt[] = [
+  { id: 'RCP-1001', productId: 'prod-component', releaseId: 'DS 4.6.0-rc.2', pulledAt: '2026-10-05 09:12', items: 15 },
+  { id: 'RCP-0987', productId: 'prod-ops', releaseId: 'DS 4.5.2', pulledAt: '2026-09-24 17:40', items: 15 },
+  { id: 'RCP-0954', productId: 'prod-mobile', releaseId: 'DS 4.5.1', pulledAt: '2026-09-12 11:08', items: 14 }
+];
+
+const initialSnapshots: ReleaseSnapshot[] = [
+  { id: 'DS 4.6.0-rc.2', version: '4.6.0-rc.2', publishedAt: '2026-10-05', publisher: '顾清', dependencyList: null, tokenCount: 15 },
+  { id: 'DS 4.5.2', version: '4.5.2', publishedAt: '2026-09-24', publisher: '顾清', dependencyList: null, tokenCount: 15 },
+  { id: 'DS 4.5.1', version: '4.5.1', publishedAt: '2026-09-12', publisher: '周序', dependencyList: null, tokenCount: 14 },
+  { id: 'DS 4.5.0', version: '4.5.0', publishedAt: '2026-08-28', publisher: '顾清', dependencyList: null, tokenCount: 14 }
+];
+
 const storageKey = 'yy63-token-governance';
 const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(storageKey) : null;
 const saved = raw ? JSON.parse(raw) : null;
+
+function nowStamp() {
+  return new Date().toLocaleString('zh-CN', { hour12: false });
+}
 
 export const useTokenStore = defineStore('tokens', {
   state: () => ({
@@ -62,7 +137,13 @@ export const useTokenStore = defineStore('tokens', {
     releaseVersion: '4.6.0-rc.2',
     locked: (saved?.locked as boolean) ?? false,
     lastPublished: (saved?.lastPublished as string) ?? 'DS 4.5.2',
-    baseline: initialTokens.map((token) => ({ id: token.id, value: token.value }))
+    baseline: initialTokens.map((token) => ({ id: token.id, value: token.value })),
+    role: (saved?.role as Role) ?? 'maintainer',
+    operatorName: (saved?.operatorName as string) ?? '顾清',
+    products: (saved?.products as Product[]) ?? initialProducts,
+    receipts: (saved?.receipts as ProductReceipt[]) ?? initialReceipts,
+    releaseSnapshots: (saved?.releaseSnapshots as ReleaseSnapshot[]) ?? initialSnapshots,
+    deactivations: (saved?.deactivations as DeactivationRecord[]) ?? []
   }),
   getters: {
     selectedToken(state): Token | undefined {
@@ -118,6 +199,44 @@ export const useTokenStore = defineStore('tokens', {
     releaseReadiness(state): number {
       const base = 100 - this.cycleNodes.length * 25 - this.invalidReferences.length * 20 - this.contrastIssues.length * 15;
       return Math.max(0, base);
+    },
+    resolvedValue(state) {
+      return (id: string): string => {
+        const seen = new Set<string>();
+        const walk = (current: string): string => {
+          const token = state.tokens.find((item) => item.id === current);
+          if (!token) return '';
+          if (!token.ref || seen.has(current)) return token.value;
+          seen.add(current);
+          return walk(token.ref);
+        };
+        return walk(id);
+      };
+    },
+    dependentsOf(state) {
+      return (tokenId: string): string[] => {
+        const result = new Set<string>();
+        const walk = (current: string) => {
+          state.tokens.filter((token) => token.ref === current).forEach((token) => {
+            if (!result.has(token.id)) {
+              result.add(token.id);
+              walk(token.id);
+            }
+          });
+        };
+        walk(tokenId);
+        return [...result];
+      };
+    },
+    latestReleaseId(state): string {
+      const sorted = [...state.releaseSnapshots].sort((a, b) => (a.publishedAt < b.publishedAt ? 1 : -1));
+      return sorted[0]?.id ?? `DS ${state.releaseVersion}`;
+    },
+    unpulledProductIds(state): string[] {
+      return state.products.filter((product) => product.pulledReleaseId !== this.latestReleaseId).map((product) => product.id);
+    },
+    missingDependencyReleases(state): string[] {
+      return state.releaseSnapshots.filter((snapshot) => snapshot.dependencyList === null).map((snapshot) => snapshot.id);
     }
   },
   actions: {
@@ -171,8 +290,195 @@ export const useTokenStore = defineStore('tokens', {
       }
       this.persist();
     },
+    setRole(role: Role) {
+      this.role = role;
+      this.persist();
+    },
+    createDeactivation(tokenId: string, reason: string, fixValue: string): DeactivationRecord | null {
+      const token = this.tokens.find((item) => item.id === tokenId);
+      if (!token) return null;
+      const dependentIds = this.dependentsOf(tokenId);
+      const aliasIds = dependentIds.filter((id) => {
+        const item = this.tokens.find((x) => x.id === id);
+        return item?.category === 'component';
+      });
+      const originalAliasValues: Record<string, string> = {};
+      aliasIds.forEach((id) => {
+        const alias = this.tokens.find((item) => item.id === id);
+        if (alias) originalAliasValues[id] = alias.value;
+      });
+      const seq = this.deactivations.length + 1;
+      const record: DeactivationRecord = {
+        id: `DT-${String(seq).padStart(3, '0')}`,
+        tokenId,
+        tokenName: token.name,
+        reason,
+        fixValue: fixValue || token.value,
+        status: 'pending',
+        createdAt: nowStamp(),
+        createdBy: this.operatorName,
+        affectedProductIds: [],
+        recalculatedAliasIds: aliasIds,
+        originalBaseValue: token.value,
+        originalAliasValues,
+        version: 1
+      };
+      this.deactivations.push(record);
+      this.persist();
+      return record;
+    },
+    confirmDeactivation(id: string, expectedVersion: number): { ok: boolean; conflict?: boolean; reason?: string } {
+      if (this.role !== 'maintainer') {
+        return { ok: false, reason: '越权提交已拒绝：仅发布维护员可确认停用，普通编辑无此权限。' };
+      }
+      const record = this.deactivations.find((item) => item.id === id);
+      if (!record) return { ok: false, reason: '停用记录不存在。' };
+      if (record.version !== expectedVersion) {
+        const reason = `并发冲突：停用编号 ${id} 已被先到者写入（版本 ${record.version}），本次提交版本 ${expectedVersion} 已过期，请刷新后重试。`;
+        if (record.status === 'pending') {
+          record.status = 'failed';
+          record.failureReason = reason;
+        }
+        this.persist();
+        return { ok: false, conflict: true, reason };
+      }
+      if (record.status !== 'pending') return { ok: false, reason: `当前状态为「${record.status}」，无需确认。` };
+      const token = this.tokens.find((item) => item.id === record.tokenId);
+      if (token) {
+        token.value = record.fixValue;
+        token.themes[this.activeTheme] = record.fixValue;
+      }
+      const unpulled = this.unpulledProductIds;
+      unpulled.forEach((pid) => {
+        const product = this.products.find((item) => item.id === pid);
+        if (!product) return;
+        if (!record.affectedProductIds.includes(pid)) record.affectedProductIds.push(pid);
+        product.frozen = true;
+      });
+      record.recalculatedAliasIds.forEach((aid) => {
+        const alias = this.tokens.find((item) => item.id === aid);
+        if (alias) {
+          const resolved = this.resolvedValue(aid);
+          alias.value = resolved;
+          Object.keys(alias.themes).forEach((theme) => { alias.themes[theme] = resolved; });
+        }
+      });
+      record.status = 'confirmed';
+      record.confirmedAt = nowStamp();
+      record.confirmedBy = this.operatorName;
+      record.version += 1;
+      this.persist();
+      return { ok: true };
+    },
+    simulateFailure(id: string): { ok: boolean; reason?: string } {
+      const record = this.deactivations.find((item) => item.id === id);
+      if (!record) return { ok: false, reason: '停用记录不存在。' };
+      if (record.status !== 'pending') return { ok: false, reason: `当前状态为「${record.status}」，无法模拟失败。` };
+      const target = this.unpulledProductIds.find((pid) => !record.affectedProductIds.includes(pid));
+      if (target) {
+        record.affectedProductIds.push(target);
+        const product = this.products.find((item) => item.id === target);
+        if (product) product.frozen = true;
+        record.failureReason = `模拟确认失败：处理至第 1 个产品（${product?.name}）时超时，已冻结的产品需按停用编号 ${id} 恢复。`;
+      } else {
+        record.failureReason = `模拟确认失败：停用编号 ${id} 处理超时，需按停用编号恢复。`;
+      }
+      record.status = 'failed';
+      this.persist();
+      return { ok: true, reason: record.failureReason };
+    },
+    restoreDeactivation(id: string): { ok: boolean; reason?: string } {
+      const record = this.deactivations.find((item) => item.id === id);
+      if (!record) return { ok: false, reason: '停用记录不存在。' };
+      if (record.status !== 'failed') return { ok: false, reason: `当前状态为「${record.status}」，无需恢复。` };
+      const token = this.tokens.find((item) => item.id === record.tokenId);
+      if (token) {
+        token.value = record.originalBaseValue;
+        token.themes[this.activeTheme] = record.originalBaseValue;
+      }
+      record.affectedProductIds.forEach((pid) => {
+        const product = this.products.find((item) => item.id === pid);
+        if (product && product.frozen) product.frozen = false;
+      });
+      record.recalculatedAliasIds.forEach((aid) => {
+        const alias = this.tokens.find((item) => item.id === aid);
+        if (alias && record.originalAliasValues[aid] !== undefined) {
+          const original = record.originalAliasValues[aid];
+          alias.value = original;
+          Object.keys(alias.themes).forEach((theme) => { alias.themes[theme] = original; });
+        }
+      });
+      record.status = 'pending';
+      record.restoredAt = nowStamp();
+      record.failureReason = undefined;
+      this.persist();
+      return { ok: true };
+    },
+    fillDependencyList(releaseId: string): { ok: boolean; reason?: string } {
+      const snapshot = this.releaseSnapshots.find((item) => item.id === releaseId);
+      if (!snapshot) return { ok: false, reason: '发布快照不存在。' };
+      if (snapshot.dependencyList !== null) return { ok: false, reason: '依赖清单已存在，无需补齐。' };
+      snapshot.dependencyList = this.tokens.map((token) => ({ tokenId: token.id, ref: token.ref ?? null }));
+      this.persist();
+      return { ok: true };
+    },
+    reenableDeactivation(id: string): { ok: boolean; reason?: string; filled?: string[] } {
+      const record = this.deactivations.find((item) => item.id === id);
+      if (!record) return { ok: false, reason: '停用记录不存在。' };
+      if (record.status !== 'confirmed') return { ok: false, reason: `当前状态为「${record.status}」，无法重新启用。` };
+      const filled: string[] = [];
+      this.missingDependencyReleases.forEach((rid) => {
+        const snapshot = this.releaseSnapshots.find((item) => item.id === rid);
+        if (snapshot && snapshot.dependencyList === null) {
+          snapshot.dependencyList = this.tokens.map((token) => ({ tokenId: token.id, ref: token.ref ?? null }));
+          filled.push(rid);
+        }
+      });
+      record.affectedProductIds.forEach((pid) => {
+        const product = this.products.find((item) => item.id === pid);
+        if (product && product.frozen) product.frozen = false;
+      });
+      record.status = 'reenabled';
+      record.reenabledAt = nowStamp();
+      this.persist();
+      return { ok: true, filled };
+    },
+    pullRelease(productId: string, releaseId: string): { ok: boolean; reason?: string } {
+      const product = this.products.find((item) => item.id === productId);
+      if (!product) return { ok: false, reason: '产品不存在。' };
+      if (product.frozen) return { ok: false, reason: `产品「${product.name}」已冻结，停用确认未生效前无法拉取新版本。` };
+      const snapshot = this.releaseSnapshots.find((item) => item.id === releaseId);
+      const receipt: ProductReceipt = {
+        id: `RCP-${Date.now().toString().slice(-6)}`,
+        productId,
+        releaseId,
+        pulledAt: nowStamp(),
+        items: snapshot?.tokenCount ?? this.tokens.length
+      };
+      this.receipts.unshift(receipt);
+      product.pulledReleaseId = releaseId;
+      this.persist();
+      return { ok: true };
+    },
     persist() {
-      if (typeof localStorage !== 'undefined') localStorage.setItem(storageKey, JSON.stringify({ tokens: this.tokens, changes: this.changes, activeTheme: this.activeTheme, selectedTokenId: this.selectedTokenId, search: this.search, category: this.category, locked: this.locked, lastPublished: this.lastPublished }));
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(storageKey, JSON.stringify({
+          tokens: this.tokens,
+          changes: this.changes,
+          activeTheme: this.activeTheme,
+          selectedTokenId: this.selectedTokenId,
+          search: this.search,
+          category: this.category,
+          locked: this.locked,
+          lastPublished: this.lastPublished,
+          role: this.role,
+          operatorName: this.operatorName,
+          products: this.products,
+          receipts: this.receipts,
+          releaseSnapshots: this.releaseSnapshots,
+          deactivations: this.deactivations
+        }));
+      }
     }
   }
 });

@@ -14,6 +14,7 @@ import {
   SwapIcon
 } from 'tdesign-icons-vue-next';
 import TokenEditor from './components/TokenEditor.vue';
+import DeactivationFlow from './components/DeactivationFlow.vue';
 import { fetchTokens, submitRelease, type Token } from './api';
 import { useTokenStore } from './store';
 
@@ -42,7 +43,8 @@ const nav = [
   { path: '/', label: '令牌工作区', icon: 'token' },
   { path: '/graph', label: '依赖与校验', icon: 'control-platform' },
   { path: '/review', label: '变更评审', icon: 'git-commit' },
-  { path: '/publish', label: '主题发布', icon: 'send' }
+  { path: '/publish', label: '主题发布', icon: 'send' },
+  { path: '/deactivate', label: '停用与回执', icon: 'poweroff' }
 ];
 
 const pageTitle = computed(() => nav.find((item) => item.path === route.path)?.label ?? '令牌工作区');
@@ -153,7 +155,7 @@ function publish() {
       <div class="release-chip"><span>当前候选</span><strong>DS {{ store.releaseVersion }}</strong></div>
       <div class="header-spacer" />
       <t-tag theme="success" variant="light-outline">校验通过 {{ store.releaseReadiness }}%</t-tag>
-      <div class="operator"><span>设计系统维护员</span><strong>顾清 · Core DS</strong></div>
+      <div class="operator"><span>{{ store.role === 'maintainer' ? '发布维护员' : '普通编辑' }}</span><strong>{{ store.operatorName }} · Core DS</strong></div>
     </t-header>
     <t-layout class="body-layout">
       <t-aside class="side-nav">
@@ -226,6 +228,10 @@ function publish() {
               <div class="change-actions"><t-button variant="outline" :disabled="change.status !== '待评审'" @click="store.rejectChange(change.id)">退回并说明</t-button><t-button theme="primary" :disabled="change.status !== '待评审'" @click="store.acceptChange(change.id)">接受变更</t-button></div>
             </div>
           </div>
+        </section>
+
+        <section v-else-if="route.path === '/deactivate'" class="deactivate-page">
+          <DeactivationFlow />
         </section>
 
         <section v-else class="publish-page">
