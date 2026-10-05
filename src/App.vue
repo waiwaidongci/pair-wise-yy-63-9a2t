@@ -14,8 +14,10 @@ import {
   SwapIcon
 } from 'tdesign-icons-vue-next';
 import TokenEditor from './components/TokenEditor.vue';
+import DeactivationCenter from './components/DeactivationCenter.vue';
 import { fetchTokens, submitRelease, type Token } from './api';
 import { useTokenStore } from './store';
+import { useDeactivationStore } from './deactivation/store';
 
 const AddButtonIcon = () => h(AddIcon);
 const ArrowRightButtonIcon = () => h(ArrowRightIcon);
@@ -29,6 +31,7 @@ const SwapButtonIcon = () => h(SwapIcon);
 const route = useRoute();
 const router = useRouter();
 const store = useTokenStore();
+const deactivation = useDeactivationStore();
 const { data: remote } = useQuery({ queryKey: ['tokens'], queryFn: fetchTokens });
 const selectedVersion = ref(store.releaseVersion);
 const batchFrom = ref('');
@@ -42,7 +45,8 @@ const nav = [
   { path: '/', label: '令牌工作区', icon: 'token' },
   { path: '/graph', label: '依赖与校验', icon: 'control-platform' },
   { path: '/review', label: '变更评审', icon: 'git-commit' },
-  { path: '/publish', label: '主题发布', icon: 'send' }
+  { path: '/publish', label: '主题发布', icon: 'send' },
+  { path: '/deactivation', label: '停用中心', icon: 'error-circle' }
 ];
 
 const pageTitle = computed(() => nav.find((item) => item.path === route.path)?.label ?? '令牌工作区');
@@ -87,6 +91,10 @@ watch(remote, (value) => {
 
 function go(path: string) {
   router.push(path);
+}
+
+function switchActor(value: unknown) {
+  if (typeof value === 'string') deactivation.setActor(value);
 }
 
 function updateEditor(value: string) {
@@ -153,7 +161,14 @@ function publish() {
       <div class="release-chip"><span>当前候选</span><strong>DS {{ store.releaseVersion }}</strong></div>
       <div class="header-spacer" />
       <t-tag theme="success" variant="light-outline">校验通过 {{ store.releaseReadiness }}%</t-tag>
-      <div class="operator"><span>设计系统维护员</span><strong>顾清 · Core DS</strong></div>
+      <t-select
+        :value="deactivation.actorId"
+        size="small"
+        style="width: 168px"
+        :options="deactivation.actors.map(a => ({ label: `${a.role === 'release-maintainer' ? '发布维护员' : '普通编辑'} · ${a.name}`, value: a.id }))"
+        @change="switchActor"
+      />
+      <div class="operator"><span>当前身份</span><strong>{{ deactivation.actor.name }} · {{ deactivation.isMaintainer ? '发布维护员' : '普通编辑' }}</strong></div>
     </t-header>
     <t-layout class="body-layout">
       <t-aside class="side-nav">
@@ -228,7 +243,7 @@ function publish() {
           </div>
         </section>
 
-        <section v-else class="publish-page">
+        <section v-else-if="route.path === '/publish'" class="publish-page">
           <div class="panel publish-main">
             <div class="panel-head"><div><strong>发布准备</strong><span>生成只读版本，支持回滚到历史基线</span></div><t-tag :theme="store.locked ? 'success' : 'warning'">{{ store.locked ? '已锁定' : '候选版本' }}</t-tag></div>
             <div class="publish-form">
@@ -248,6 +263,10 @@ function publish() {
             <div class="panel diff-panel"><div class="panel-head"><div><strong>版本差异</strong><span>相对 {{ store.lastPublished }}</span></div><t-tag>{{ store.diffRows.length }} 项</t-tag></div><div v-for="row in store.diffRows" :key="row.id" class="diff-row"><strong>{{ row.name }}</strong><span>{{ row.id }}</span><div><del>{{ row.before }}</del><ins>{{ row.after }}</ins></div></div><p v-if="!store.diffRows.length" class="empty">暂无未发布差异。</p></div>
             <div class="panel history-panel"><div class="panel-head"><div><strong>发布历史</strong><span>可追溯版本</span></div><HistoryIcon /></div><div class="history-row"><t-tag theme="success" variant="light">当前</t-tag><div><strong>DS {{ store.lastPublished }}</strong><span>顾清 · 09-24 17:20</span></div><t-button size="small" variant="text">查看</t-button></div><div class="history-row"><t-tag>历史</t-tag><div><strong>DS 4.5.1</strong><span>周序 · 09-12 11:04</span></div><t-button size="small" variant="text">回滚</t-button></div><div class="history-row"><t-tag>历史</t-tag><div><strong>DS 4.5.0</strong><span>顾清 · 08-28 15:42</span></div><t-button size="small" variant="text">回滚</t-button></div></div>
           </aside>
+        </section>
+
+        <section v-else-if="route.path === '/deactivation'">
+          <DeactivationCenter />
         </section>
       </t-content>
     </t-layout>
